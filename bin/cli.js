@@ -20,33 +20,33 @@ const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const SRC = path.join(PKG_ROOT, "src");
 
 // Supported Cursor hook events, by profile.
+// Tool activity is captured via the GENERIC postToolUse / postToolUseFailure
+// hooks, which fire for every tool (Read, Write, Shell, Grep, Search, List,
+// Delete, Task, MCP). This gives full coverage — including file reads and
+// searches — with no double-logging, unlike the specialized per-tool hooks.
 const EVENT_PROFILES = {
   minimal: ["beforeSubmitPrompt", "afterAgentResponse", "stop"],
   recommended: [
     "beforeSubmitPrompt",
     "afterAgentResponse",
     "afterAgentThought",
-    "beforeShellExecution",
-    "afterShellExecution",
-    "beforeMCPExecution",
-    "afterMCPExecution",
-    "afterFileEdit",
-    "afterTabFileEdit",
+    "postToolUse",
+    "postToolUseFailure",
     "stop",
   ],
   all: [
     "beforeSubmitPrompt",
     "afterAgentResponse",
     "afterAgentThought",
-    "beforeShellExecution",
-    "afterShellExecution",
-    "beforeMCPExecution",
-    "afterMCPExecution",
-    "beforeReadFile",
-    "afterFileEdit",
-    "beforeTabFileRead",
-    "afterTabFileEdit",
+    "postToolUse",
+    "postToolUseFailure",
     "stop",
+    "sessionStart",
+    "sessionEnd",
+    "workspaceOpen",
+    "preCompact",
+    "subagentStart",
+    "subagentStop",
   ],
 };
 

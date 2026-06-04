@@ -73,8 +73,10 @@ Then **reload Cursor** (`Cmd/Ctrl+Shift+P → "Developer: Reload Window"`) and s
 ### Event profiles
 
 - **minimal** — `beforeSubmitPrompt`, `afterAgentResponse`, `stop` (just prompt → response).
-- **recommended** *(default)* — adds thinking, shell, MCP, and file edits. The good balance.
-- **all** — everything, including high-frequency `beforeReadFile` / `beforeTabFileRead` (noisy).
+- **recommended** *(default)* — adds `afterAgentThought` plus **`postToolUse` / `postToolUseFailure`**, the generic tool hooks that fire for **every** agent action — Read, Write, Shell, Grep, Search, List, Delete, Task, MCP. This is how you get **file reads and all other agent actions** in one clean stream (no double-logging).
+- **all** — recommended + lifecycle events (`sessionStart`, `sessionEnd`, `workspaceOpen`, `preCompact`, `subagentStart`, `subagentStop`).
+
+> Why `postToolUse` instead of the specialized `beforeShellExecution` / `beforeReadFile` / etc.? Those fire *in parallel* with the generic hooks, so enabling both would double-log every action. The generic hook alone captures everything, labeled per tool (`Read: file.ts`, `Grep: pattern`, `Shell: cmd`, …). The specialized handlers still ship and can be enabled manually if you want fine-grained control/permission gating.
 
 ## What gets installed
 

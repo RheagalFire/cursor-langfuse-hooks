@@ -27,7 +27,7 @@ if (!process.env.LANGFUSE_SECRET_KEY) {
   config({ path: resolve(process.cwd(), ".env") });
 }
 
-export const HOOK_HANDLER_VERSION = "2.3.0";
+export const HOOK_HANDLER_VERSION = "2.4.0";
 
 // All traces share one name so you can filter by it in Langfuse; the prompt is
 // kept as the trace input. Override with CURSOR_LANGFUSE_TRACE_NAME.
@@ -65,13 +65,15 @@ export function getTrace(input) {
   const workspace = deriveWorkspaceName(input.workspace_roots);
   // userId = the person, for per-employee usage tracking. Prefer Cursor's
   // authenticated email (payload field, then the CURSOR_USER_EMAIL env var
-  // Cursor exports to hook scripts), then a manual override, then the
-  // workspace as a last resort so it's never empty.
+  // Cursor exports to hook scripts), then a manual override. Left undefined if
+  // none — we never fall back to the workspace here, so an event that happens
+  // to omit the email can't clobber the real userId set by another event
+  // (the workspace is recorded separately as a tag).
   const userId =
     input.user_email ||
     process.env.CURSOR_USER_EMAIL ||
     process.env.CURSOR_LANGFUSE_USER_ID ||
-    workspace;
+    undefined;
   return lf.trace({
     id: turnId(input),
     name: TRACE_NAME,

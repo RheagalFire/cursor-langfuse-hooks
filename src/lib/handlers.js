@@ -15,6 +15,35 @@ import { addCompletionScores, turnId } from "./langfuse-client.js";
 
 const llmId = (input) => `${turnId(input)}-llm`;
 
+const MAX_OUTPUT = 20000; // cap large tool outputs (e.g. full file reads) so traces stay sane
+function clamp(v) {
+  if (typeof v !== "string") return v;
+  return v.length > MAX_OUTPUT ? v.slice(0, MAX_OUTPUT) + `\n…[truncated ${v.length - MAX_OUTPUT} chars]` : v;
+}
+
+// A readable span title per tool type, from the generic postToolUse payload.
+function toolLabel(input) {
+  const name = input.tool_name || "tool";
+  const ti = input.tool_input || {};
+  const f = () => fileName(ti.file_path || ti.path || ti.target_file);
+  switch (name) {
+    case "Read": return `Read: ${f()}`;
+    case "Write":
+    case "Edit":
+    case "MultiEdit": return `Edit: ${f()}`;
+    case "Delete": return `Delete: ${f()}`;
+    case "Shell":
+    case "Terminal": return `Shell: ${String(ti.command || "").slice(0, 60)}`;
+    case "Grep":
+    case "Search":
+    case "Codebase": return `${name}: ${String(ti.pattern || ti.query || "").slice(0, 60)}`;
+    case "List":
+    case "LS": return `List: ${ti.path || ti.directory || ""}`;
+    case "Task": return `Task: ${String(ti.description || ti.prompt || "").slice(0, 50)}`;
+    default: return `Tool: ${name}`;
+  }
+}
+
 export function handleBeforeSubmitPrompt(trace, input) {
   // Owns the trace input (the prompt). The trace name is a constant set in getTrace.
   trace.update({
@@ -34,6 +63,50 @@ export function handleAfterAgentResponse(trace, input) {
     output: input.text,
     metadata: { response_length: input.text?.length || 0 },
   });
+  return null;
+}
+
+// Generic capture for ALL agent tool calls (Read, Write, Shell, Grep, Search,
+// List, Delete, Task, MCP, …). One span per completed tool call with its
+// input + output + duration. Use this instead of the specialized hooks to get
+// full coverage without double-logging.
+export function handlePostToolUse(trace, input) {
+  let output = input.tool_output;
+  if (typeof output === "string") {
+    try { output = JSON.parse(output); } catch { /* keep as string */ }
+  }
+  trace
+    .span({
+      name: toolLabel(input),
+      input: input.tool_input,
+      output: typeof output === "string" ? clamp(output) : output,
+      metadata: {
+        tool_name: input.tool_name,
+        tool_use_id: input.tool_use_id,
+        duration_ms: input.duration,
+        duration: formatDuration(input.duration),
+        cwd: input.cwd,
+      },
+    })
+    .end();
+  return null;
+}
+
+export function handlePostToolUseFailure(trace, input) {
+  trace
+    .span({
+      name: `Failed ${toolLabel(input)}`,
+      level: input.failure_type === "permission_denied" ? "WARNING" : "ERROR",
+      input: input.tool_input,
+      output: clamp(input.error_message),
+      metadata: {
+        tool_name: input.tool_name,
+        failure_type: input.failure_type,
+        is_interrupt: input.is_interrupt,
+        duration_ms: input.duration,
+      },
+    })
+    .end();
   return null;
 }
 
@@ -185,10 +258,32 @@ export function handleAfterTabFileEdit(trace, input) {
   return null;
 }
 
+// Lifecycle events (session/workspace/subagent/compact) — recorded as a simple
+// event on the turn's trace. Used by the `all` profile.
+export function handleLifecycle(trace, input) {
+  trace.event({
+    name: input.hook_event_name || "lifecycle",
+    metadata: {
+      status: input.status,
+      reason: input.reason,
+      subagent_id: input.subagent_id,
+    },
+  });
+  return null;
+}
+
 const HANDLERS = {
   beforeSubmitPrompt: handleBeforeSubmitPrompt,
+  sessionStart: handleLifecycle,
+  sessionEnd: handleLifecycle,
+  workspaceOpen: handleLifecycle,
+  preCompact: handleLifecycle,
+  subagentStart: handleLifecycle,
+  subagentStop: handleLifecycle,
   afterAgentResponse: handleAfterAgentResponse,
   afterAgentThought: handleAfterAgentThought,
+  postToolUse: handlePostToolUse,
+  postToolUseFailure: handlePostToolUseFailure,
   beforeShellExecution: handleBeforeShellExecution,
   afterShellExecution: handleAfterShellExecution,
   beforeMCPExecution: handleBeforeMCPExecution,
