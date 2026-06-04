@@ -4,7 +4,8 @@
  * Trace model (the important part):
  *   session  = conversation_id   -> one Cursor chat thread (new chat = new session)
  *   trace    = generation_id     -> ONE turn (prompt -> response)
- *   userId   = workspace folder  -> filter all chats in a project
+ *   userId   = signed-in email   -> per-person usage tracking (workspace -> tag)
+ *   env      = local-dev         -> separates Cursor sessions from prod traffic
  *
  * Every hook event for the same turn upserts the SAME trace id, so observations
  * accumulate while top-level fields are written only by the event that owns them
@@ -26,7 +27,7 @@ if (!process.env.LANGFUSE_SECRET_KEY) {
   config({ path: resolve(process.cwd(), ".env") });
 }
 
-export const HOOK_HANDLER_VERSION = "2.2.0";
+export const HOOK_HANDLER_VERSION = "2.3.0";
 
 // All traces share one name so you can filter by it in Langfuse; the prompt is
 // kept as the trace input. Override with CURSOR_LANGFUSE_TRACE_NAME.
@@ -40,6 +41,9 @@ export function getLangfuseClient() {
       secretKey: process.env.LANGFUSE_SECRET_KEY,
       publicKey: process.env.LANGFUSE_PUBLIC_KEY,
       baseUrl: process.env.LANGFUSE_BASE_URL || "https://cloud.langfuse.com",
+      // Cursor hooks are local dev sessions; tag them so they don't mix with
+      // production traffic. Override with LANGFUSE_TRACING_ENVIRONMENT.
+      environment: process.env.LANGFUSE_TRACING_ENVIRONMENT || "local-dev",
       release: HOOK_HANDLER_VERSION,
     });
   }

@@ -197,10 +197,11 @@ async function init(args) {
 
   // 2. Credentials (gitignored).
   const traceName = args["trace-name"] || "cursor-agent";
+  const environment = args["environment"] || "local-dev";
   fs.writeFileSync(
     path.join(installDir, ".env"),
     `LANGFUSE_PUBLIC_KEY=${pub}\nLANGFUSE_SECRET_KEY=${sec}\nLANGFUSE_BASE_URL=${base}\n` +
-      `CURSOR_LANGFUSE_TRACE_NAME=${traceName}\n`,
+      `CURSOR_LANGFUSE_TRACE_NAME=${traceName}\nLANGFUSE_TRACING_ENVIRONMENT=${environment}\n`,
     { mode: 0o600 }
   );
   ok("Wrote .env");
@@ -242,6 +243,7 @@ ${C.bold}Options${C.reset}
   --secret-key <key>   LANGFUSE_SECRET_KEY (sk-lf-...)
   --base-url <url>     Langfuse host (default: https://cloud.langfuse.com)
   --trace-name <name>  Constant name for every trace (default: cursor-agent)
+  --environment <env>  Langfuse tracing environment (default: local-dev)
   --yes                Non-interactive; fail if credentials are missing
   -h, --help           Show this help
 
