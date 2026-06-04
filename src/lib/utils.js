@@ -58,6 +58,8 @@ export function baseTags(input) {
   const mt = modelTag(input.model);
   if (mt) tags.add(mt);
   if (input.composer_mode) tags.add(`mode-${input.composer_mode}`);
+  const ws = deriveWorkspaceName(input.workspace_roots);
+  if (ws) tags.add(`workspace:${ws}`);
   return Array.from(tags);
 }
 

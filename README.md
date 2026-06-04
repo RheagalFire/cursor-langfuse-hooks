@@ -12,7 +12,8 @@ This is the important design decision, and what makes traces readable:
 Session  =  conversation_id   →  one Cursor chat thread   (new chat = new session)
   Trace  =  generation_id     →  ONE turn (prompt → response)
     └─ observations: thinking · shell · MCP · file edits · token usage
-  userId =  workspace folder  →  filter every chat in a project
+  userId =  signed-in user's email   →  per-person usage tracking
+  tag    =  workspace:<folder>       →  filter by project
 ```
 
 - **One trace per turn**, not one giant trace per chat. The trace's `input` is your prompt, its `output` is the agent's reply, and the tool activity nests underneath.
@@ -65,6 +66,7 @@ Then **reload Cursor** (`Cmd/Ctrl+Shift+P → "Developer: Reload Window"`) and s
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Langfuse credentials (required) |
 | `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Langfuse host (EU/US clouds or self-hosted) |
 | `CURSOR_LANGFUSE_TRACE_NAME` | `cursor-agent` | Constant name for every trace, so you can filter by it in Langfuse. The prompt is stored as the trace **input**, not the name. |
+| `CURSOR_LANGFUSE_USER_ID` | — | Fallback `userId` when Cursor doesn't supply an email. By default `userId` = the signed-in user's email (Cursor's `user_email` payload field / `CURSOR_USER_EMAIL`), falling back to this, then the workspace name. Set this for per-employee attribution on installs where the email may be `null`. |
 | `CURSOR_LANGFUSE_DEBUG` | `0` | Set `1` to log each invocation to `hook-debug.log` |
 
 ### Event profiles
