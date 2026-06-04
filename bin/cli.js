@@ -196,9 +196,11 @@ async function init(args) {
   ok("Copied hook runtime");
 
   // 2. Credentials (gitignored).
+  const traceName = args["trace-name"] || "cursor-agent";
   fs.writeFileSync(
     path.join(installDir, ".env"),
-    `LANGFUSE_PUBLIC_KEY=${pub}\nLANGFUSE_SECRET_KEY=${sec}\nLANGFUSE_BASE_URL=${base}\n`,
+    `LANGFUSE_PUBLIC_KEY=${pub}\nLANGFUSE_SECRET_KEY=${sec}\nLANGFUSE_BASE_URL=${base}\n` +
+      `CURSOR_LANGFUSE_TRACE_NAME=${traceName}\n`,
     { mode: 0o600 }
   );
   ok("Wrote .env");
@@ -239,6 +241,7 @@ ${C.bold}Options${C.reset}
   --public-key <key>   LANGFUSE_PUBLIC_KEY (pk-lf-...)
   --secret-key <key>   LANGFUSE_SECRET_KEY (sk-lf-...)
   --base-url <url>     Langfuse host (default: https://cloud.langfuse.com)
+  --trace-name <name>  Constant name for every trace (default: cursor-agent)
   --yes                Non-interactive; fail if credentials are missing
   -h, --help           Show this help
 

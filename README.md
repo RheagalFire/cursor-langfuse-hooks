@@ -58,6 +58,15 @@ Then **reload Cursor** (`Cmd/Ctrl+Shift+P → "Developer: Reload Window"`) and s
 | `--base-url <url>` | Langfuse host (default `https://cloud.langfuse.com`; EU/US clouds supported) |
 | `--yes` | Non-interactive; fail if credentials are missing |
 
+### Environment variables (in `.cursor/hooks/langfuse/.env`)
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Langfuse credentials (required) |
+| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Langfuse host (EU/US clouds or self-hosted) |
+| `CURSOR_LANGFUSE_TRACE_NAME` | `cursor-agent` | Constant name for every trace, so you can filter by it in Langfuse. The prompt is stored as the trace **input**, not the name. |
+| `CURSOR_LANGFUSE_DEBUG` | `0` | Set `1` to log each invocation to `hook-debug.log` |
+
 ### Event profiles
 
 - **minimal** — `beforeSubmitPrompt`, `afterAgentResponse`, `stop` (just prompt → response).

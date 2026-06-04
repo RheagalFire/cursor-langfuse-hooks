@@ -1,6 +1,6 @@
 {
   "name": "cursor-langfuse-hooks",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Trace Cursor AI agent chats to Langfuse via Cursor Hooks. One trace per turn, grouped into a session per chat.",
   "type": "module",
   "bin": {

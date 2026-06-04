@@ -26,7 +26,11 @@ if (!process.env.LANGFUSE_SECRET_KEY) {
   config({ path: resolve(process.cwd(), ".env") });
 }
 
-export const HOOK_HANDLER_VERSION = "2.0.0";
+export const HOOK_HANDLER_VERSION = "2.1.0";
+
+// All traces share one name so you can filter by it in Langfuse; the prompt is
+// kept as the trace input. Override with CURSOR_LANGFUSE_TRACE_NAME.
+const TRACE_NAME = process.env.CURSOR_LANGFUSE_TRACE_NAME || "cursor-agent";
 
 let client = null;
 
@@ -57,6 +61,7 @@ export function getTrace(input) {
   const workspace = deriveWorkspaceName(input.workspace_roots);
   return lf.trace({
     id: turnId(input),
+    name: TRACE_NAME,
     sessionId: input.conversation_id || input.session_id || undefined,
     userId: workspace,
     release: HOOK_HANDLER_VERSION,

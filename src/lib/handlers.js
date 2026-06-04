@@ -9,7 +9,6 @@ import {
   fileName,
   formatDuration,
   determineLevel,
-  traceTitle,
   baseTags,
 } from "./utils.js";
 import { addCompletionScores, turnId } from "./langfuse-client.js";
@@ -17,9 +16,8 @@ import { addCompletionScores, turnId } from "./langfuse-client.js";
 const llmId = (input) => `${turnId(input)}-llm`;
 
 export function handleBeforeSubmitPrompt(trace, input) {
-  // Owns the trace title + input.
+  // Owns the trace input (the prompt). The trace name is a constant set in getTrace.
   trace.update({
-    name: traceTitle(input.prompt, input.model),
     input: input.prompt,
     metadata: { attachment_count: input.attachments?.length || 0 },
   });
