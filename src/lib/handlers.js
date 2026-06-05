@@ -60,14 +60,14 @@ function emitSubagent(trace, parentId, mainPath, taskInput, model) {
     for (const b of m.blocks) {
       if (b.type === "tool_use") {
         if (b.name === "UpdateCurrentStep") continue; // internal progress, not an action
-        trace
-          .span({
-            id: `${parentId}-sub${k++}`,
-            name: toolLabel(b.name, b.input),
-            input: b.input,
-            parentObservationId: parentId,
-          })
-          .end();
+        // No endTime: Cursor's transcript has no per-tool timing, so we don't
+        // fabricate a duration — just record the call, ordered by startTime.
+        trace.span({
+          id: `${parentId}-sub${k++}`,
+          name: toolLabel(b.name, b.input),
+          input: b.input,
+          parentObservationId: parentId,
+        });
       } else if (b.type === "text" && b.text && b.text.trim() && b.text.trim() !== "[REDACTED]") {
         lastText = b.text.trim();
       }
@@ -125,7 +125,8 @@ export function buildLatestTurnTrace(input) {
       }
       for (const b of m.blocks.filter((b) => b.type === "tool_use")) {
         const spanId = `${traceId}-tool${toolN++}`;
-        trace.span({ id: spanId, name: toolLabel(b.name, b.input), input: b.input }).end();
+        // No endTime — no real per-tool timing exists in the transcript.
+        trace.span({ id: spanId, name: toolLabel(b.name, b.input), input: b.input });
         // A subagent (Task) has its own transcript — nest its tool calls under it.
         if (b.name === "Task") emitSubagent(trace, spanId, path, b.input, input.model);
       }
