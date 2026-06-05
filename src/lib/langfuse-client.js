@@ -5,10 +5,14 @@
  * so the handler can be dropped into a Cursor plugin with no node_modules.
  *
  * Trace model:
- *   session  = conversation_id   -> one Cursor chat thread (new chat = new session)
- *   trace    = generation_id     -> ONE turn (prompt -> response)
+ *   trace    = conversation_id   -> one Cursor chat (all turns + tool calls)
+ *   session  = conversation_id   -> new chat = new session
  *   userId   = signed-in email   -> per-person usage tracking (workspace -> tag)
  *   env      = local-dev         -> separates Cursor sessions from prod traffic
+ *
+ * Note: Cursor assigns a fresh generation_id per LLM step, so a single user turn
+ * spans multiple generation_ids. We therefore key the TRACE by conversation_id
+ * (stable per chat) and use generation_id only to group per-step observations.
  *
  * Same exported surface as before (getTrace/turnId/addCompletionScores/
  * flushLangfuse) so handlers.js is unchanged.
@@ -42,7 +46,7 @@ function loadEnv(path) {
 loadEnv(resolve(__dirname, "..", ".env"));
 if (!process.env.LANGFUSE_SECRET_KEY) loadEnv(resolve(process.cwd(), ".env"));
 
-export const HOOK_HANDLER_VERSION = "3.0.0";
+export const HOOK_HANDLER_VERSION = "3.1.0";
 const TRACE_NAME = process.env.CURSOR_LANGFUSE_TRACE_NAME || "cursor-agent";
 const ENVIRONMENT = process.env.LANGFUSE_TRACING_ENVIRONMENT || "local-dev";
 const BASE_URL = (process.env.LANGFUSE_BASE_URL || "https://cloud.langfuse.com").replace(/\/+$/, "");
@@ -54,13 +58,18 @@ function emit(type, body) {
   batch.push({ id: randomUUID(), type, timestamp: stamp(), body: { environment: ENVIRONMENT, ...body } });
 }
 
-export function turnId(input) {
-  return input.generation_id || input.conversation_id || `cursor-${Date.now()}`;
+// Trace id = the CHAT (conversation). Cursor assigns a new generation_id per
+// LLM step, so one user turn can span several generation_ids — keying the trace
+// by generation_id splits a turn into incomplete traces. conversation_id is the
+// stable per-chat id, so every prompt/response/tool of the chat lands in one
+// trace. (Per-step grouping is still done via generation_id on the observations.)
+export function chatTraceId(input) {
+  return input.conversation_id || input.session_id || input.generation_id || `cursor-${Date.now()}`;
 }
 
 /** A handle whose methods mirror the Langfuse SDK's trace/observation API. */
 export function getTrace(input) {
-  const traceId = turnId(input);
+  const traceId = chatTraceId(input);
   const workspace = deriveWorkspaceName(input.workspace_roots);
   const userId =
     input.user_email ||

@@ -11,9 +11,11 @@ import {
   determineLevel,
   baseTags,
 } from "./utils.js";
-import { addCompletionScores, turnId } from "./langfuse-client.js";
+import { addCompletionScores } from "./langfuse-client.js";
 
-const llmId = (input) => `${turnId(input)}-llm`;
+// Observation ids are keyed by the per-step generation_id (not the chat trace id),
+// so each turn's LLM generation is distinct within the conversation trace.
+const llmId = (input) => `${input.generation_id || "gen"}-llm`;
 
 const MAX_OUTPUT = 20000; // cap large tool outputs (e.g. full file reads) so traces stay sane
 function clamp(v) {
@@ -45,8 +47,16 @@ function toolLabel(input) {
 }
 
 export function handleBeforeSubmitPrompt(trace, input) {
-  // Owns the trace input (the prompt). The trace name is a constant set in getTrace.
+  // Set the chat trace's top-level input to the latest prompt, and record this
+  // turn's prompt as its own observation so every turn stays visible in the
+  // conversation trace (a chat has many turns).
   trace.update({
+    input: input.prompt,
+    metadata: { attachment_count: input.attachments?.length || 0 },
+  });
+  trace.event({
+    id: `${input.generation_id || "gen"}-prompt`,
+    name: "User Prompt",
     input: input.prompt,
     metadata: { attachment_count: input.attachments?.length || 0 },
   });
