@@ -2,3 +2,7 @@ node_modules/
 *.log
 .env
 .DS_Store
+
+# runtime hook queue
+.queue/
+hook-debug.log

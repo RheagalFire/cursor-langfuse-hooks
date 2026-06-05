@@ -46,7 +46,7 @@ function loadEnv(path) {
 loadEnv(resolve(__dirname, "..", ".env"));
 if (!process.env.LANGFUSE_SECRET_KEY) loadEnv(resolve(process.cwd(), ".env"));
 
-export const HOOK_HANDLER_VERSION = "3.1.0";
+export const HOOK_HANDLER_VERSION = "3.2.0";
 const TRACE_NAME = process.env.CURSOR_LANGFUSE_TRACE_NAME || "cursor-agent";
 const ENVIRONMENT = process.env.LANGFUSE_TRACING_ENVIRONMENT || "local-dev";
 const BASE_URL = (process.env.LANGFUSE_BASE_URL || "https://cloud.langfuse.com").replace(/\/+$/, "");
