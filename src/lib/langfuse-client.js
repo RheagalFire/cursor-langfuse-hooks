@@ -43,14 +43,20 @@ function loadEnv(path) {
 loadEnv(resolve(__dirname, "..", ".env"));
 if (!process.env.LANGFUSE_SECRET_KEY) loadEnv(resolve(process.cwd(), ".env"));
 
-export const HOOK_HANDLER_VERSION = "3.4.0";
+export const HOOK_HANDLER_VERSION = "3.4.1";
 const TRACE_NAME = process.env.CURSOR_LANGFUSE_TRACE_NAME || "cursor-agent";
 const ENVIRONMENT = process.env.LANGFUSE_TRACING_ENVIRONMENT || "local-dev";
 const BASE_URL = (process.env.LANGFUSE_BASE_URL || "https://cloud.langfuse.com").replace(/\/+$/, "");
 
 // In-memory ingestion batch for this process.
 const batch = [];
-const stamp = () => new Date().toISOString();
+// Monotonically increasing timestamps (1ms apart) in EMISSION order. We emit
+// observations in logical order (prompt → responses/tools → …), so this keeps
+// them ordered in Langfuse — otherwise every observation gets the same flush
+// time and the timeline renders in arbitrary/ reversed order.
+let _seq = 0;
+const _base = Date.now();
+const stamp = () => new Date(_base + _seq++).toISOString();
 function emit(type, body) {
   batch.push({ id: randomUUID(), type, timestamp: stamp(), body: { environment: ENVIRONMENT, ...body } });
 }
