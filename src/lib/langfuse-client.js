@@ -1,81 +1,75 @@
 /**
- * Langfuse client + trace identity.
+ * Langfuse client + trace identity — ZERO dependencies.
  *
- * Trace model (the important part):
+ * Posts directly to Langfuse's public ingestion API over Node's built-in https,
+ * so the handler can be dropped into a Cursor plugin with no node_modules.
+ *
+ * Trace model:
  *   session  = conversation_id   -> one Cursor chat thread (new chat = new session)
  *   trace    = generation_id     -> ONE turn (prompt -> response)
  *   userId   = signed-in email   -> per-person usage tracking (workspace -> tag)
  *   env      = local-dev         -> separates Cursor sessions from prod traffic
  *
- * Every hook event for the same turn upserts the SAME trace id, so observations
- * accumulate while top-level fields are written only by the event that owns them
- * (prompt sets input, response sets output). No clobbering, no giant traces.
+ * Same exported surface as before (getTrace/turnId/addCompletionScores/
+ * flushLangfuse) so handlers.js is unchanged.
  */
 
-import { Langfuse } from "langfuse";
-import { config } from "dotenv";
-import { resolve, dirname } from "path";
-import { fileURLToPath } from "url";
+import https from "node:https";
+import http from "node:http";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { baseTags, deriveWorkspaceName } from "./utils.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Credentials usually arrive already-exported by run.sh; dotenv is a fallback
-// and never overrides an existing process.env value.
-config({ path: resolve(__dirname, "..", ".env") });
-if (!process.env.LANGFUSE_SECRET_KEY) {
-  config({ path: resolve(process.cwd(), ".env") });
-}
-
-export const HOOK_HANDLER_VERSION = "2.4.0";
-
-// All traces share one name so you can filter by it in Langfuse; the prompt is
-// kept as the trace input. Override with CURSOR_LANGFUSE_TRACE_NAME.
-const TRACE_NAME = process.env.CURSOR_LANGFUSE_TRACE_NAME || "cursor-agent";
-
-let client = null;
-
-export function getLangfuseClient() {
-  if (!client) {
-    client = new Langfuse({
-      secretKey: process.env.LANGFUSE_SECRET_KEY,
-      publicKey: process.env.LANGFUSE_PUBLIC_KEY,
-      baseUrl: process.env.LANGFUSE_BASE_URL || "https://cloud.langfuse.com",
-      // Cursor hooks are local dev sessions; tag them so they don't mix with
-      // production traffic. Override with LANGFUSE_TRACING_ENVIRONMENT.
-      environment: process.env.LANGFUSE_TRACING_ENVIRONMENT || "local-dev",
-      release: HOOK_HANDLER_VERSION,
-    });
+// Minimal .env loader (no dotenv). run.sh usually exports these already; this is
+// a fallback and never overrides an existing process.env value.
+function loadEnv(path) {
+  try {
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      const m = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/);
+      if (!m || m[1] in process.env) continue;
+      let v = m[2];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      process.env[m[1]] = v;
+    }
+  } catch {
+    /* no .env — rely on real env */
   }
-  return client;
+}
+loadEnv(resolve(__dirname, "..", ".env"));
+if (!process.env.LANGFUSE_SECRET_KEY) loadEnv(resolve(process.cwd(), ".env"));
+
+export const HOOK_HANDLER_VERSION = "3.0.0";
+const TRACE_NAME = process.env.CURSOR_LANGFUSE_TRACE_NAME || "cursor-agent";
+const ENVIRONMENT = process.env.LANGFUSE_TRACING_ENVIRONMENT || "local-dev";
+const BASE_URL = (process.env.LANGFUSE_BASE_URL || "https://cloud.langfuse.com").replace(/\/+$/, "");
+
+// In-memory ingestion batch for this process.
+const batch = [];
+const stamp = () => new Date().toISOString();
+function emit(type, body) {
+  batch.push({ id: randomUUID(), type, timestamp: stamp(), body: { environment: ENVIRONMENT, ...body } });
 }
 
-/** Stable per-turn trace id. Falls back to the conversation if no turn id. */
 export function turnId(input) {
   return input.generation_id || input.conversation_id || `cursor-${Date.now()}`;
 }
 
-/**
- * Upsert the turn's trace with only stable, idempotent fields. Safe to call on
- * every event — it never touches name/input/output (those belong to the prompt
- * and response handlers).
- */
+/** A handle whose methods mirror the Langfuse SDK's trace/observation API. */
 export function getTrace(input) {
-  const lf = getLangfuseClient();
+  const traceId = turnId(input);
   const workspace = deriveWorkspaceName(input.workspace_roots);
-  // userId = the person, for per-employee usage tracking. Prefer Cursor's
-  // authenticated email (payload field, then the CURSOR_USER_EMAIL env var
-  // Cursor exports to hook scripts), then a manual override. Left undefined if
-  // none — we never fall back to the workspace here, so an event that happens
-  // to omit the email can't clobber the real userId set by another event
-  // (the workspace is recorded separately as a tag).
   const userId =
     input.user_email ||
     process.env.CURSOR_USER_EMAIL ||
     process.env.CURSOR_LANGFUSE_USER_ID ||
     undefined;
-  return lf.trace({
-    id: turnId(input),
+
+  emit("trace-create", {
+    id: traceId,
     name: TRACE_NAME,
     sessionId: input.conversation_id || input.session_id || undefined,
     userId,
@@ -91,6 +85,25 @@ export function getTrace(input) {
       cursor_version: input.cursor_version,
     },
   });
+
+  const observation = (createType, updateType) => (body = {}) => {
+    const id = body.id || randomUUID();
+    emit(createType, { id, traceId, startTime: stamp(), ...body });
+    return { id, end: (extra = {}) => emit(updateType, { id, traceId, endTime: stamp(), ...extra }) };
+  };
+
+  return {
+    id: traceId,
+    update: (body = {}) => emit("trace-create", { id: traceId, ...body }),
+    generation: observation("generation-create", "generation-update"),
+    span: observation("span-create", "span-update"),
+    event: (body = {}) => {
+      const id = body.id || randomUUID();
+      emit("event-create", { id, traceId, startTime: stamp(), ...body });
+      return { id, end: () => {} };
+    },
+    score: (body = {}) => emit("score-create", { id: randomUUID(), traceId, ...body }),
+  };
 }
 
 export function addCompletionScores(trace, input) {
@@ -101,7 +114,6 @@ export function addCompletionScores(trace, input) {
   };
   const [value, comment] = map[input.status] || [0.5, `Unknown status: ${input.status}`];
   trace.score({ name: "completion_status", value, comment, dataType: "NUMERIC" });
-
   if (typeof input.loop_count === "number") {
     trace.score({
       name: "efficiency",
@@ -112,6 +124,37 @@ export function addCompletionScores(trace, input) {
   }
 }
 
+/** POST the batch to Langfuse's ingestion API. Fails open (never throws). */
 export async function flushLangfuse() {
-  await getLangfuseClient().flushAsync();
+  if (!batch.length) return;
+  const events = batch.splice(0, batch.length);
+  const pk = process.env.LANGFUSE_PUBLIC_KEY;
+  const sk = process.env.LANGFUSE_SECRET_KEY;
+  if (!pk || !sk) return;
+  const payload = JSON.stringify({ batch: events });
+  const url = new URL(BASE_URL + "/api/public/ingestion");
+  const lib = url.protocol === "http:" ? http : https;
+  const auth = Buffer.from(`${pk}:${sk}`).toString("base64");
+  await new Promise((done) => {
+    const req = lib.request(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${auth}`,
+          "Content-Length": Buffer.byteLength(payload),
+        },
+      },
+      (res) => {
+        res.resume();
+        res.on("end", done);
+        res.on("error", done);
+      }
+    );
+    req.on("error", done); // fail open — tracing must never block Cursor
+    req.setTimeout(8000, () => { req.destroy(); done(); });
+    req.write(payload);
+    req.end();
+  });
 }

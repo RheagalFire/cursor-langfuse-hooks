@@ -1,6 +1,6 @@
 {
   "name": "cursor-langfuse-hooks",
-  "version": "2.4.0",
+  "version": "3.0.0",
   "description": "Trace Cursor AI agent chats to Langfuse via Cursor Hooks. One trace per turn, grouped into a session per chat.",
   "type": "module",
   "bin": {
@@ -31,9 +31,5 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/RheagalFire/cursor-langfuse-hooks.git"
-  },
-  "dependencies": {
-    "dotenv": "^16.4.5",
-    "langfuse": "^3.30.0"
   }
 }
