@@ -25,34 +25,14 @@ const SRC = path.join(PKG_ROOT, "src");
 // (beforeReadFile fires constantly), whereas the generic postToolUse barely
 // fires. So we subscribe to the specialized set for real coverage.
 const EVENT_PROFILES = {
-  minimal: ["beforeSubmitPrompt", "afterAgentResponse", "stop"],
-  recommended: [
-    "beforeSubmitPrompt",
-    "afterAgentThought",
-    "afterAgentResponse",
-    "beforeReadFile",
-    "afterFileEdit",
-    "beforeShellExecution",
-    "afterShellExecution",
-    "beforeMCPExecution",
-    "afterMCPExecution",
-    "stop",
-  ],
-  all: [
-    "beforeSubmitPrompt",
-    "afterAgentThought",
-    "afterAgentResponse",
-    "beforeReadFile",
-    "afterFileEdit",
-    "beforeShellExecution",
-    "afterShellExecution",
-    "beforeMCPExecution",
-    "afterMCPExecution",
-    "beforeTabFileRead",
-    "afterTabFileEdit",
-    "stop",
-  ],
-};
+  // Transcript-driven: the whole conversation trace is rebuilt from Cursor's
+  // transcript on the reliable turn-end events. Cursor fires per-event hooks
+  // (beforeReadFile, beforeSubmitPrompt, ...) inconsistently, so we don't rely
+  // on them. stop is primary; afterAgentResponse is a backup trigger.
+  minimal: ["stop"],
+  recommended: ["afterAgentResponse", "stop"],
+  all: ["afterAgentResponse", "stop"],
+}
 
 const C = {
   reset: "\x1b[0m",
