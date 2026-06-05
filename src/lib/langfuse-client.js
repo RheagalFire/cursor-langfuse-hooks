@@ -46,7 +46,7 @@ function loadEnv(path) {
 loadEnv(resolve(__dirname, "..", ".env"));
 if (!process.env.LANGFUSE_SECRET_KEY) loadEnv(resolve(process.cwd(), ".env"));
 
-export const HOOK_HANDLER_VERSION = "3.3.0";
+export const HOOK_HANDLER_VERSION = "3.4.0";
 const TRACE_NAME = process.env.CURSOR_LANGFUSE_TRACE_NAME || "cursor-agent";
 const ENVIRONMENT = process.env.LANGFUSE_TRACING_ENVIRONMENT || "local-dev";
 const BASE_URL = (process.env.LANGFUSE_BASE_URL || "https://cloud.langfuse.com").replace(/\/+$/, "");
@@ -58,18 +58,19 @@ function emit(type, body) {
   batch.push({ id: randomUUID(), type, timestamp: stamp(), body: { environment: ENVIRONMENT, ...body } });
 }
 
-// Trace id = the CHAT (conversation). Cursor assigns a new generation_id per
-// LLM step, so one user turn can span several generation_ids — keying the trace
-// by generation_id splits a turn into incomplete traces. conversation_id is the
-// stable per-chat id, so every prompt/response/tool of the chat lands in one
-// trace. (Per-step grouping is still done via generation_id on the observations.)
+// The chat (conversation) id — used as the Langfuse sessionId so all of a
+// chat's turn-traces group together.
 export function chatTraceId(input) {
   return input.conversation_id || input.session_id || input.generation_id || `cursor-${Date.now()}`;
 }
 
-/** A handle whose methods mirror the Langfuse SDK's trace/observation API. */
-export function getTrace(input) {
-  const traceId = chatTraceId(input);
+/**
+ * A handle whose methods mirror the Langfuse SDK's trace/observation API.
+ * Pass `overrideId` for a per-turn trace id (e.g. `<conv>-turn<N>`); sessionId
+ * stays the conversation id so all turns of a chat share one session.
+ */
+export function getTrace(input, overrideId) {
+  const traceId = overrideId || chatTraceId(input);
   const workspace = deriveWorkspaceName(input.workspace_roots);
   const userId =
     input.user_email ||

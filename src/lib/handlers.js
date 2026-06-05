@@ -1,16 +1,18 @@
 /**
- * Build a complete Langfuse trace for a Cursor chat from its transcript.
+ * Build a Langfuse trace for the LATEST turn of a Cursor chat, from its transcript.
  *
  * Triggered on `stop` / `afterAgentResponse` (reliable turn-end events). Reading
  * the transcript — rather than assembling from per-event hooks, which Cursor
  * fires inconsistently — is what makes tracing reliable and complete.
  *
- * Idempotent: observation ids are derived deterministically from the message
- * index, so re-running on every turn upserts the same observations and only adds
- * new ones. One batched POST per flush.
+ * Model: trace = one TURN (`<conversation_id>-turn<N>`), sessionId = conversation_id,
+ * so all of a chat's turns share a session (matches the brainforge-assistant
+ * convention). Turns are split by user-message boundaries in the transcript,
+ * which is deterministic and stable. Observation ids are deterministic, so a
+ * re-flush of the same turn upserts (no duplicates). One batched POST per flush.
  */
 
-import { addCompletionScores } from "./langfuse-client.js";
+import { addCompletionScores, getTrace, chatTraceId } from "./langfuse-client.js";
 import { fileName } from "./utils.js";
 import { parseTranscript, cleanPrompt, resolveTranscriptPath } from "./transcript.js";
 
@@ -47,18 +49,30 @@ function toolLabel(name, input = {}) {
  * Reconstruct the whole conversation trace from the transcript.
  * `trace` is the handle from getTrace(input); `input` is the stop/response payload.
  */
-export function buildTraceFromTranscript(trace, input) {
+export function buildLatestTurnTrace(input) {
   const path = resolveTranscriptPath(input);
   if (!path) return;
   const msgs = parseTranscript(path);
   if (!msgs.length) return;
 
-  let firstPrompt = null;
+  // Turns are delimited by user messages. The latest turn = the last user
+  // message plus the assistant messages that follow it.
+  const userIdxs = [];
+  msgs.forEach((m, i) => { if (m.role === "user") userIdxs.push(i); });
+  if (!userIdxs.length) return;
+
+  const turnNum = userIdxs.length; // 1-based, stable across flushes (append-only)
+  const turnMsgs = msgs.slice(userIdxs[userIdxs.length - 1]);
+  const traceId = `${chatTraceId(input)}-turn${turnNum}`;
+  const trace = getTrace(input, traceId); // sessionId = conversation_id
+
+  let prompt = null;
   let lastResponse = null;
   let lastLlmId = null;
+  let llmN = 0;
+  let toolN = 0;
 
-  msgs.forEach((m, i) => {
-    const base = `${trace.id}-msg${i}`;
+  for (const m of turnMsgs) {
     const text = m.blocks
       .filter((b) => b.type === "text")
       .map((b) => b.text)
@@ -66,28 +80,23 @@ export function buildTraceFromTranscript(trace, input) {
       .trim();
 
     if (m.role === "user") {
-      const prompt = cleanPrompt(text);
-      if (prompt) {
-        trace.event({ id: `${base}-user`, name: "User Prompt", input: clamp(prompt) });
-        if (firstPrompt == null) firstPrompt = prompt;
-      }
+      prompt = cleanPrompt(text);
+      if (prompt) trace.event({ id: `${traceId}-user`, name: "User Prompt", input: clamp(prompt) });
     } else if (m.role === "assistant") {
       if (text) {
-        lastLlmId = `${base}-llm`;
+        lastLlmId = `${traceId}-llm${llmN++}`;
         trace.generation({ id: lastLlmId, name: "LLM", model: input.model, output: clamp(text) });
         lastResponse = text;
       }
-      m.blocks
-        .filter((b) => b.type === "tool_use")
-        .forEach((b, j) => {
-          trace
-            .span({ id: `${base}-tool${j}`, name: toolLabel(b.name, b.input), input: b.input })
-            .end();
-        });
+      for (const b of m.blocks.filter((b) => b.type === "tool_use")) {
+        trace
+          .span({ id: `${traceId}-tool${toolN++}`, name: toolLabel(b.name, b.input), input: b.input })
+          .end();
+      }
     }
-  });
+  }
 
-  trace.update({ input: firstPrompt ?? undefined, output: lastResponse ?? undefined });
+  trace.update({ input: prompt ?? undefined, output: lastResponse ?? undefined });
 
   // Token usage comes from the stop payload (the transcript has content, not counts).
   if (lastLlmId && (input.input_tokens != null || input.output_tokens != null)) {

@@ -11,8 +11,8 @@
  */
 
 import { readStdin } from "./lib/utils.js";
-import { getTrace, flushLangfuse, HOOK_HANDLER_VERSION } from "./lib/langfuse-client.js";
-import { buildTraceFromTranscript } from "./lib/handlers.js";
+import { flushLangfuse, HOOK_HANDLER_VERSION } from "./lib/langfuse-client.js";
+import { buildLatestTurnTrace } from "./lib/handlers.js";
 
 const FLUSH_EVENTS = new Set(["stop", "afterAgentResponse"]);
 
@@ -20,8 +20,7 @@ async function main() {
   try {
     const input = await readStdin();
     if (!input || !FLUSH_EVENTS.has(input.hook_event_name)) return;
-    const trace = getTrace(input);
-    buildTraceFromTranscript(trace, input);
+    buildLatestTurnTrace(input);
     await flushLangfuse();
   } catch (error) {
     console.error(`[cursor-langfuse v${HOOK_HANDLER_VERSION}] ${error.message}`);

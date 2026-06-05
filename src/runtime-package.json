@@ -1,7 +1,7 @@
 {
   "name": "cursor-langfuse-runtime",
   "private": true,
-  "version": "3.3.0",
+  "version": "3.4.0",
   "type": "module",
   "description": "Installed Cursor->Langfuse hook runtime. Managed by cursor-langfuse-hooks."
 }
