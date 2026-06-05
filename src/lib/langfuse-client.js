@@ -5,17 +5,14 @@
  * so the handler can be dropped into a Cursor plugin with no node_modules.
  *
  * Trace model:
- *   trace    = conversation_id   -> one Cursor chat (all turns + tool calls)
- *   session  = conversation_id   -> new chat = new session
+ *   trace    = one TURN (`<conversation_id>-turn<N>`)  -> a single prompt→response
+ *   session  = conversation_id   -> all of a chat's turns share a session
  *   userId   = signed-in email   -> per-person usage tracking (workspace -> tag)
  *   env      = local-dev         -> separates Cursor sessions from prod traffic
  *
- * Note: Cursor assigns a fresh generation_id per LLM step, so a single user turn
- * spans multiple generation_ids. We therefore key the TRACE by conversation_id
- * (stable per chat) and use generation_id only to group per-step observations.
- *
- * Same exported surface as before (getTrace/turnId/addCompletionScores/
- * flushLangfuse) so handlers.js is unchanged.
+ * Content is built from Cursor's transcript on the reliable turn-end events, and
+ * turns are split by user-message boundaries (deterministic), so per-turn traces
+ * are stable and idempotent. See handlers.js (buildLatestTurnTrace).
  */
 
 import https from "node:https";
