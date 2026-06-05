@@ -14,7 +14,7 @@
 
 import { addCompletionScores, getTrace, chatTraceId } from "./langfuse-client.js";
 import { fileName } from "./utils.js";
-import { parseTranscript, cleanPrompt, resolveTranscriptPath } from "./transcript.js";
+import { parseTranscript, cleanPrompt, resolveTranscriptPath, findSubagentMessages } from "./transcript.js";
 
 const MAX = 20000;
 const clamp = (v) =>
@@ -49,6 +49,41 @@ function toolLabel(name, input = {}) {
  * Reconstruct the whole conversation trace from the transcript.
  * `trace` is the handle from getTrace(input); `input` is the stop/response payload.
  */
+// Emit a subagent's own tool calls as child spans under its Task span.
+function emitSubagent(trace, parentId, mainPath, taskInput, model) {
+  const msgs = findSubagentMessages(mainPath, taskInput && taskInput.prompt);
+  if (!msgs.length) return;
+  let k = 0;
+  let lastText = null;
+  for (const m of msgs) {
+    if (m.role !== "assistant") continue;
+    for (const b of m.blocks) {
+      if (b.type === "tool_use") {
+        if (b.name === "UpdateCurrentStep") continue; // internal progress, not an action
+        trace
+          .span({
+            id: `${parentId}-sub${k++}`,
+            name: toolLabel(b.name, b.input),
+            input: b.input,
+            parentObservationId: parentId,
+          })
+          .end();
+      } else if (b.type === "text" && b.text && b.text.trim() && b.text.trim() !== "[REDACTED]") {
+        lastText = b.text.trim();
+      }
+    }
+  }
+  if (lastText) {
+    trace.generation({
+      id: `${parentId}-subresult`,
+      name: "Subagent result",
+      model,
+      output: clamp(lastText),
+      parentObservationId: parentId,
+    });
+  }
+}
+
 export function buildLatestTurnTrace(input) {
   const path = resolveTranscriptPath(input);
   if (!path) return;
@@ -89,9 +124,10 @@ export function buildLatestTurnTrace(input) {
         lastResponse = text;
       }
       for (const b of m.blocks.filter((b) => b.type === "tool_use")) {
-        trace
-          .span({ id: `${traceId}-tool${toolN++}`, name: toolLabel(b.name, b.input), input: b.input })
-          .end();
+        const spanId = `${traceId}-tool${toolN++}`;
+        trace.span({ id: spanId, name: toolLabel(b.name, b.input), input: b.input }).end();
+        // A subagent (Task) has its own transcript — nest its tool calls under it.
+        if (b.name === "Task") emitSubagent(trace, spanId, path, b.input, input.model);
       }
     }
   }

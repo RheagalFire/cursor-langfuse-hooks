@@ -8,8 +8,8 @@
  *   block = { type:"text", text } | { type:"tool_use", name, input } | { type:"tool_result", ... }
  */
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
 
 /** Read + parse the JSONL transcript into ordered messages. Returns [] on any error. */
 export function parseTranscript(path) {
@@ -39,6 +39,42 @@ export function cleanPrompt(text) {
   return String(text || "")
     .replace(/<\/?user_query>/g, "")
     .trim();
+}
+
+/** First user-message text of a (sub)transcript, cleaned. */
+function firstUserText(msgs) {
+  const u = msgs.find((m) => m.role === "user");
+  if (!u) return "";
+  return cleanPrompt(u.blocks.filter((b) => b.type === "text").map((b) => b.text).join("\n"));
+}
+
+/**
+ * Subagents (the `Task` tool) write their own transcript at
+ * `<conv>/subagents/<id>.jsonl`. There's no id on the Task block, but the
+ * subagent's first user message IS the Task's `input.prompt`, so we match by
+ * prompt text. Returns the parsed subagent messages, or [] if not found.
+ */
+export function findSubagentMessages(mainTranscriptPath, taskPrompt) {
+  const want = cleanPrompt(taskPrompt);
+  if (!want) return [];
+  let files;
+  try {
+    const dir = join(dirname(mainTranscriptPath), "subagents");
+    files = readdirSync(dir)
+      .filter((f) => f.endsWith(".jsonl") || f.endsWith(".json"))
+      .map((f) => join(dir, f));
+  } catch {
+    return [];
+  }
+  const key = want.slice(0, 120);
+  for (const f of files) {
+    const msgs = parseTranscript(f);
+    const head = firstUserText(msgs).slice(0, 120);
+    if (head && (head === key || head.startsWith(key.slice(0, 80)) || key.startsWith(head.slice(0, 80)))) {
+      return msgs;
+    }
+  }
+  return [];
 }
 
 /**
