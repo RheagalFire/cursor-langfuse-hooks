@@ -101,9 +101,16 @@ export function buildLatestTurnTrace(input) {
   const traceId = `${chatTraceId(input)}-turn${turnNum}`;
   const trace = getTrace(input, traceId); // sessionId = conversation_id
 
+  // Real total duration: turn START stamped at beforeSubmitPrompt (run.sh),
+  // turn END = now (this runs on stop). Cursor reports no duration itself.
+  const startSec = parseInt(process.env.CURSOR_LANGFUSE_TURN_START || "", 10);
+  const startISO = Number.isFinite(startSec) && startSec > 0 ? new Date(startSec * 1000).toISOString() : null;
+  const endISO = new Date().toISOString();
+
   let prompt = null;
   let lastResponse = null;
   let lastLlmId = null;
+  let lastGen = null;
   let llmN = 0;
   let toolN = 0;
 
@@ -116,11 +123,12 @@ export function buildLatestTurnTrace(input) {
 
     if (m.role === "user") {
       prompt = cleanPrompt(text);
-      if (prompt) trace.event({ id: `${traceId}-user`, name: "User Prompt", input: clamp(prompt) });
+      // Anchor the prompt at the real turn start so the trace's total duration is real.
+      if (prompt) trace.event({ id: `${traceId}-user`, name: "User Prompt", input: clamp(prompt), ...(startISO ? { startTime: startISO } : {}) });
     } else if (m.role === "assistant") {
       if (text) {
         lastLlmId = `${traceId}-llm${llmN++}`;
-        trace.generation({ id: lastLlmId, name: "LLM", model: input.model, output: clamp(text) });
+        lastGen = trace.generation({ id: lastLlmId, name: "LLM", model: input.model, output: clamp(text) });
         lastResponse = text;
       }
       for (const b of m.blocks.filter((b) => b.type === "tool_use")) {
@@ -133,7 +141,11 @@ export function buildLatestTurnTrace(input) {
     }
   }
 
-  trace.update({ input: prompt ?? undefined, output: lastResponse ?? undefined });
+  trace.update({ input: prompt ?? undefined, output: lastResponse ?? undefined, ...(startISO ? { timestamp: startISO } : {}) });
+
+  // Close the last generation at turn end so the trace's total duration =
+  // (turn end − turn start). Only when we have a real start (else no fake total).
+  if (startISO && lastGen) lastGen.end({ endTime: endISO });
 
   // Token usage comes from the stop payload (the transcript has content, not counts).
   if (lastLlmId && (input.input_tokens != null || input.output_tokens != null)) {

@@ -2,10 +2,11 @@
 # cursor-langfuse hook wrapper — transcript-driven.
 #
 # Cursor fires per-event hooks inconsistently, so we don't build traces from
-# them. Instead, on the reliable turn-end events (stop / afterAgentResponse) we
-# rebuild the whole conversation trace from Cursor's transcript file. Those are
-# the only events that do work here; any other registered hook just gets a fast
-# permissive response so the agent is never blocked.
+# them. On the reliable turn-end events (stop / afterAgentResponse) we rebuild
+# the whole turn's trace from Cursor's transcript file.
+#
+# For a real total duration (Cursor reports none), we stamp the turn START on
+# beforeSubmitPrompt and pass it to the handler at turn end.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -19,14 +20,21 @@ if [ -f "$DIR/.env" ]; then
 fi
 
 EVENT="$(printf '%s' "$PAYLOAD" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+CONV="$(printf '%s' "$PAYLOAD" | sed -n 's/.*"conversation_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+SAFE_CONV="$(printf '%s' "${CONV:-default}" | tr -c 'A-Za-z0-9._-' '_')"
+STARTDIR="$DIR/.turnstart"
 
-# Permissive responses for any before* hooks that happen to be registered.
+# Permissive responses for any before* hooks; record turn start on submit.
 case "$EVENT" in
-  beforeSubmitPrompt) printf '{"continue":true}\n' ;;
+  beforeSubmitPrompt)
+    printf '{"continue":true}\n'
+    mkdir -p "$STARTDIR" 2>/dev/null || true
+    date +%s > "$STARTDIR/$SAFE_CONV" 2>/dev/null || true
+    ;;
   beforeShellExecution|beforeMCPExecution|beforeReadFile|beforeTabFileRead) printf '{"permission":"allow"}\n' ;;
 esac
 
-# Only turn-end events do work: rebuild the trace from the transcript.
+# Turn-end events: rebuild the trace from the transcript.
 case "$EVENT" in
   stop|afterAgentResponse)
     NODE_BIN="$(command -v node 2>/dev/null || true)"
@@ -36,8 +44,9 @@ case "$EVENT" in
       done
     fi
     if [ -n "$NODE_BIN" ]; then
+      START="$(cat "$STARTDIR/$SAFE_CONV" 2>/dev/null || true)"
       LOG="/dev/null"; [ "${CURSOR_LANGFUSE_DEBUG:-0}" = "1" ] && LOG="$DIR/hook-debug.log"
-      printf '%s' "$PAYLOAD" | "$NODE_BIN" "$DIR/hook-handler.js" >>"$LOG" 2>&1 || true
+      printf '%s' "$PAYLOAD" | CURSOR_LANGFUSE_TURN_START="$START" "$NODE_BIN" "$DIR/hook-handler.js" >>"$LOG" 2>&1 || true
     fi
     ;;
 esac
