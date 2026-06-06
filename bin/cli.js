@@ -9,7 +9,6 @@
  * and installs the runtime deps. Existing hooks are preserved.
  */
 
-import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
@@ -25,13 +24,14 @@ const SRC = path.join(PKG_ROOT, "src");
 // (beforeReadFile fires constantly), whereas the generic postToolUse barely
 // fires. So we subscribe to the specialized set for real coverage.
 const EVENT_PROFILES = {
-  // Transcript-driven: the whole conversation trace is rebuilt from Cursor's
-  // transcript on the reliable turn-end events. Cursor fires per-event hooks
-  // (beforeReadFile, beforeSubmitPrompt, ...) inconsistently, so we don't rely
-  // on them. stop is primary; afterAgentResponse is a backup trigger.
-  minimal: ["stop"],
-  recommended: ["afterAgentResponse", "stop"],
-  all: ["afterAgentResponse", "stop"],
+  // Transcript-driven: each turn's trace is rebuilt from Cursor's transcript on
+  // the reliable turn-end events (stop = primary, afterAgentResponse = backup).
+  // beforeSubmitPrompt stamps the turn START so the trace gets a real total
+  // duration. We intentionally don't subscribe to per-event tool hooks (Cursor
+  // fires them inconsistently) — tool calls come from the transcript instead.
+  minimal: ["beforeSubmitPrompt", "stop"],
+  recommended: ["beforeSubmitPrompt", "afterAgentResponse", "stop"],
+  all: ["beforeSubmitPrompt", "afterAgentResponse", "stop"],
 }
 
 const C = {
@@ -138,18 +138,6 @@ async function promptCredentials(args) {
   return { pub, sec, base };
 }
 
-function npmInstall(dir) {
-  try {
-    execFileSync("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], {
-      cwd: dir,
-      stdio: "inherit",
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function init(args) {
   const profile = (args.events || "recommended").toLowerCase();
   const events = EVENT_PROFILES[profile];
@@ -170,13 +158,12 @@ async function init(args) {
 
   const { pub, sec, base } = await promptCredentials(args);
 
-  // 1. Copy runtime files.
+  // 1. Copy runtime files (dependency-free — no node_modules to install).
   fs.mkdirSync(installDir, { recursive: true });
   fs.copyFileSync(path.join(SRC, "hook-handler.js"), path.join(installDir, "hook-handler.js"));
   copyDir(path.join(SRC, "lib"), path.join(installDir, "lib"));
   fs.copyFileSync(path.join(SRC, "run.sh"), runScript);
   fs.chmodSync(runScript, 0o755);
-  fs.copyFileSync(path.join(SRC, "runtime-package.json"), path.join(installDir, "package.json"));
   ok("Copied hook runtime");
 
   // 2. Credentials (gitignored).
@@ -190,15 +177,10 @@ async function init(args) {
   );
   ok("Wrote .env");
 
-  // 3. Keep secrets/deps/logs out of git.
-  ensureGitignore(installDir, [".env", "node_modules/", "hook-debug.log"]);
+  // 3. Keep secrets/runtime state out of git.
+  ensureGitignore(installDir, [".env", ".turnstart/", "hook-debug.log"]);
 
-  // 4. Install runtime deps.
-  log(`\n${C.dim}Installing runtime deps (langfuse, dotenv)…${C.reset}`);
-  if (npmInstall(installDir)) ok("Installed dependencies");
-  else warn(`npm install failed — run it yourself:  (cd "${installDir}" && npm install)`);
-
-  // 5. Wire hooks.json (absolute path; preserves existing hooks).
+  // 4. Wire hooks.json (absolute path; preserves existing hooks).
   const added = mergeHooksJson(hooksFile, events, runScript);
   ok(`Wired hooks.json (${added} event${added === 1 ? "" : "s"} added, existing hooks preserved)`);
 

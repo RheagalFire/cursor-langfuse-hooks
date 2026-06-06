@@ -1,26 +1,36 @@
 # cursor-langfuse-hooks
 
-Trace your **Cursor** AI agent chats to **Langfuse** using [Cursor Hooks](https://cursor.com/docs/agent/hooks) — no code changes to your project, just a one-line install.
+Trace your **Cursor** AI agent chats to **Langfuse** using [Cursor Hooks](https://cursor.com/docs/agent/hooks) — no code changes to your project, one-line install, **dependency-free** (no `node_modules`).
 
-Every prompt, response, thought, shell command, MCP call, and file edit is captured and organized so you can actually read what the agent did.
+It reconstructs each turn from Cursor's own conversation **transcript**, so traces are complete and reliable regardless of which fine-grained hooks Cursor happens to fire.
 
-## Tracing model
-
-This is the important design decision, and what makes traces readable:
+## Trace model
 
 ```
-Session  =  conversation_id   →  one Cursor chat thread   (new chat = new session)
-  Trace  =  generation_id     →  ONE turn (prompt → response)
-    └─ observations: thinking · shell · MCP · file edits · token usage
-  userId =  signed-in user's email   →  per-person usage tracking
-  tag    =  workspace:<folder>       →  filter by project
+session  =  conversation_id        →  one Cursor chat (new chat = new session)
+  trace  =  <conversation_id>-turn<N>   →  ONE turn (a prompt → final response)
+    ├─ User Prompt
+    ├─ LLM (assistant response text)
+    ├─ Read / Grep / Shell / … (tool calls, from the transcript)
+    └─ Task → (subagent's own Read/Grep/… nested underneath)
+  userId =  signed-in email         →  per-person usage
+  env    =  local-dev               →  separates Cursor sessions from prod
+  total duration  =  prompt-submit → stop  (real request latency)
 ```
 
-- **One trace per turn**, not one giant trace per chat. The trace's `input` is your prompt, its `output` is the agent's reply, and the tool activity nests underneath.
-- **Sessions group a whole chat**, so you can replay a conversation turn by turn.
-- **`userId` is the workspace folder name**, so you can filter to a single project across all chats.
+- **One trace per turn**, all turns of a chat grouped under one **session** (the same convention as a typical `*-assistant` Langfuse setup).
+- **Subagents** (`Task`) get their own tool calls nested under the Task span.
+- **Real total duration** per turn (Cursor exposes none, so we measure prompt-submit → stop). Per-tool durations are **not** shown (Cursor has no per-tool timing — we don't fabricate it).
+- **Idempotent**: observation ids are deterministic, so re-flushing a turn upserts instead of duplicating.
 
-> Why it matters: keying the trace by the per-turn `generation_id` (not the chat-wide `conversation_id`) means each event writes only the fields it owns — the prompt sets `input`, the response sets `output` — so nothing clobbers anything and traces stay small and legible.
+## How it works
+
+Cursor writes a transcript per chat at `~/.cursor/.../agent-transcripts/<conv>/<conv>.jsonl` (and exposes it as `CURSOR_TRANSCRIPT_PATH`). The plugin subscribes to just three hooks:
+
+- `beforeSubmitPrompt` — stamps the turn **start** (for total duration); returns instantly.
+- `afterAgentResponse` / `stop` — on turn end, parse the transcript and (re)build that turn's trace in **one** batched POST to Langfuse's ingestion API.
+
+No per-tool hooks (`beforeReadFile`, `postToolUse`, …) are used — Cursor fires them inconsistently, and the transcript already contains everything.
 
 ## Install
 
@@ -30,84 +40,59 @@ From your project root:
 npx github:RheagalFire/cursor-langfuse-hooks init
 ```
 
-You'll be asked for your Langfuse keys (from your Langfuse project settings). Non-interactive:
+You'll be asked for your Langfuse keys. Non-interactive / global:
 
 ```bash
-npx github:RheagalFire/cursor-langfuse-hooks init \
-  --public-key pk-lf-xxxx \
-  --secret-key sk-lf-xxxx \
-  --base-url https://cloud.langfuse.com
+npx github:RheagalFire/cursor-langfuse-hooks init --global --yes \
+  --public-key pk-lf-xxxx --secret-key sk-lf-xxxx \
+  --base-url https://us.cloud.langfuse.com
 ```
 
-Install for **all** projects (user-level hooks in `~/.cursor`):
-
-```bash
-npx github:RheagalFire/cursor-langfuse-hooks init --global
-```
-
-Then **reload Cursor** (`Cmd/Ctrl+Shift+P → "Developer: Reload Window"`) and send a chat. Traces show up in Langfuse immediately.
+Then **reload Cursor** (`Cmd/Ctrl+Shift+P → "Developer: Reload Window"`) and send a chat.
 
 ## Options
 
 | Flag | Description |
 |------|-------------|
 | `--global` | Install to `~/.cursor` (all projects) instead of the current project |
-| `--project <path>` | Target project root (default: current directory) |
-| `--events <profile>` | `minimal` · `recommended` · `all` (default: `recommended`) |
-| `--public-key <key>` | `LANGFUSE_PUBLIC_KEY` |
-| `--secret-key <key>` | `LANGFUSE_SECRET_KEY` |
-| `--base-url <url>` | Langfuse host (default `https://cloud.langfuse.com`; EU/US clouds supported) |
-| `--yes` | Non-interactive; fail if credentials are missing |
+| `--project <path>` | Target project root (default: cwd) |
+| `--events <profile>` | `minimal` (`beforeSubmitPrompt`,`stop`) · `recommended`/`all` (+`afterAgentResponse`). Default `recommended` |
+| `--public-key` / `--secret-key` / `--base-url` | Langfuse credentials / host |
+| `--trace-name <name>` | Constant trace name (default `cursor-agent`) |
+| `--environment <env>` | Langfuse environment tag (default `local-dev`) |
+| `--yes` | Non-interactive |
 
-### Environment variables (in `.cursor/hooks/langfuse/.env`)
+### Environment variables (`.cursor/hooks/langfuse/.env`)
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Langfuse credentials (required) |
-| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Langfuse host (EU/US clouds or self-hosted) |
-| `CURSOR_LANGFUSE_TRACE_NAME` | `cursor-agent` | Constant name for every trace, so you can filter by it in Langfuse. The prompt is stored as the trace **input**, not the name. |
-| `CURSOR_LANGFUSE_USER_ID` | — | Fallback `userId` when Cursor doesn't supply an email. By default `userId` = the signed-in user's email (Cursor's `user_email` payload field / `CURSOR_USER_EMAIL`), falling back to this, then the workspace name. Set this for per-employee attribution on installs where the email may be `null`. |
-| `LANGFUSE_TRACING_ENVIRONMENT` | `local-dev` | Langfuse environment tag, so Cursor sessions don't mix with prod traffic. Filter by it in the Langfuse UI. |
-| `CURSOR_LANGFUSE_DEBUG` | `0` | Set `1` to log each invocation to `hook-debug.log` |
-
-### Event profiles
-
-- **minimal** — `beforeSubmitPrompt`, `afterAgentResponse`, `stop` (just prompt → response).
-- **recommended** *(default)* — adds `afterAgentThought` plus **`postToolUse` / `postToolUseFailure`**, the generic tool hooks that fire for **every** agent action — Read, Write, Shell, Grep, Search, List, Delete, Task, MCP. This is how you get **file reads and all other agent actions** in one clean stream (no double-logging).
-- **all** — recommended + lifecycle events (`sessionStart`, `sessionEnd`, `workspaceOpen`, `preCompact`, `subagentStart`, `subagentStop`).
-
-> Why `postToolUse` instead of the specialized `beforeShellExecution` / `beforeReadFile` / etc.? Those fire *in parallel* with the generic hooks, so enabling both would double-log every action. The generic hook alone captures everything, labeled per tool (`Read: file.ts`, `Grep: pattern`, `Shell: cmd`, …). The specialized handlers still ship and can be enabled manually if you want fine-grained control/permission gating.
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Credentials (required) |
+| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Langfuse host (EU/US/self-hosted) |
+| `CURSOR_LANGFUSE_TRACE_NAME` | `cursor-agent` | Constant trace name; the prompt is the trace **input** |
+| `LANGFUSE_TRACING_ENVIRONMENT` | `local-dev` | Environment tag |
+| `CURSOR_LANGFUSE_USER_ID` | — | Fallback `userId` when Cursor's email isn't available |
+| `CURSOR_LANGFUSE_DEBUG` | `0` | `1` logs each invocation to `hook-debug.log` |
 
 ## What gets installed
 
 ```
 <project>/.cursor/
-├── hooks.json                 # your existing hooks are preserved; ours are merged in
+├── hooks.json                 # your existing hooks preserved; ours merged in
 └── hooks/langfuse/
     ├── hook-handler.js
-    ├── lib/{langfuse-client,handlers,utils}.js
-    ├── run.sh                 # wrapper: loads .env, resolves node, forwards stdin
-    ├── package.json
+    ├── lib/{langfuse-client,handlers,transcript,utils}.js
+    ├── run.sh                 # loads .env, resolves node, routes turn-end events
     ├── .env                   # your keys — gitignored
-    └── .gitignore             # ignores .env, node_modules, hook-debug.log
+    └── .gitignore             # ignores .env, .turnstart/, hook-debug.log
 ```
 
-`hooks.json` references `run.sh` by **absolute path** — Cursor runs hooks from the workspace root, and a relative path can silently fail to resolve. The wrapper also resolves a `node` binary even under the minimal `PATH` a GUI-launched Cursor provides.
+`hooks.json` references `run.sh` by **absolute path** (project install) or `"$CURSOR_PLUGIN_ROOT/run.sh"` (plugin install) so it resolves regardless of Cursor's working directory.
 
 ## Troubleshooting
 
-**No traces showing up?**
-
-1. Reload the Cursor window after installing — `hooks.json` only registers on load.
-2. Make sure the workspace is **trusted** (project hooks don't run in restricted mode).
-3. Check **Cursor Settings → Hooks** for the configured/executed hooks and any errors.
-4. Turn on debug logging: set `CURSOR_LANGFUSE_DEBUG=1` in `.cursor/hooks/langfuse/.env`, send a chat, then read `.cursor/hooks/langfuse/hook-debug.log`. Each invocation logs the resolved node path and payload — if the file stays empty, Cursor isn't invoking the hook (config/trust issue, not the script).
-
-Tracing failures never block Cursor — the handler always returns a permissive response.
-
-## Credits
-
-Inspired by [naoufalelh/cursor-langfuse](https://github.com/naoufalelh/cursor-langfuse); reworked around a per-turn trace model and packaged with a one-line installer.
+- **No traces?** Reload Cursor after install; ensure the workspace is trusted. Set `CURSOR_LANGFUSE_DEBUG=1` in `.env`, send a chat, read `.cursor/hooks/langfuse/hook-debug.log`.
+- **Ingestion lag:** Langfuse can take ~30s to surface a trace — that's normal.
+- Tracing failures never block Cursor — the handler always fails open.
 
 ## License
 
