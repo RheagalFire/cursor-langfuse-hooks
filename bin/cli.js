@@ -164,6 +164,10 @@ async function init(args) {
   copyDir(path.join(SRC, "lib"), path.join(installDir, "lib"));
   fs.copyFileSync(path.join(SRC, "run.sh"), runScript);
   fs.chmodSync(runScript, 0o755);
+  // package.json with {"type":"module"} is REQUIRED next to the ESM handler so
+  // Node treats it as a module — without it, Node < ~20.19 (no auto-detect)
+  // crashes with "Cannot use import statement outside a module" and no traces flush.
+  fs.copyFileSync(path.join(SRC, "runtime-package.json"), path.join(installDir, "package.json"));
   ok("Copied hook runtime");
 
   // 2. Credentials (gitignored).
